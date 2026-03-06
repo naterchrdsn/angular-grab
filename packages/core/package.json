@@ -1,0 +1,97 @@
+{
+  "name": "@nacho-labs/angular-grab",
+  "version": "0.1.0",
+  "description": "Grab any element in your Angular app and give it to AI coding agents",
+  "author": "Nate Richardson",
+  "license": "MIT",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/core/index.cjs",
+  "module": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
+  "bin": {
+    "angular-grab": "./dist/cli/index.js"
+  },
+  "builders": "./builders.json",
+  "exports": {
+    ".": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js",
+      "require": "./dist/core/index.cjs"
+    },
+    "./global": "./dist/core/index.global.js",
+    "./angular": {
+      "types": "./dist/angular/index.d.ts",
+      "import": "./dist/angular/index.js"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild-plugin/index.d.ts",
+      "import": "./dist/esbuild-plugin/index.js",
+      "require": "./dist/esbuild-plugin/index.cjs"
+    },
+    "./vite": {
+      "types": "./dist/vite-plugin/index.d.ts",
+      "import": "./dist/vite-plugin/index.js"
+    },
+    "./webpack": {
+      "types": "./dist/webpack-plugin/index.d.ts",
+      "import": "./dist/webpack-plugin/index.js",
+      "require": "./dist/webpack-plugin/index.cjs"
+    },
+    "./webpack/loader": {
+      "import": "./dist/webpack-plugin/loader.js",
+      "require": "./dist/webpack-plugin/loader.cjs"
+    },
+    "./builder": {
+      "require": "./dist/builder/index.js"
+    },
+    "./builders.json": "./builders.json",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "builders.json", "README.md"],
+  "scripts": {
+    "prebuild": "cp ../../README.md .",
+    "build": "tsup",
+    "postbuild": "mkdir -p dist/builder/builders/application dist/builder/builders/dev-server && cp src/builder/builders/application/schema.json dist/builder/builders/application/ && cp src/builder/builders/dev-server/schema.json dist/builder/builders/dev-server/ && echo '{\"type\":\"commonjs\"}' > dist/builder/package.json",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "clean": "rm -rf dist README.md"
+  },
+  "peerDependencies": {
+    "@angular/core": ">=19.0.0",
+    "@angular/build": ">=18.0.0",
+    "@angular-devkit/architect": ">=0.1800.0",
+    "esbuild": ">=0.17.0",
+    "typescript": ">=5.0.0",
+    "vite": ">=5.0.0",
+    "webpack": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@angular/core": { "optional": true },
+    "@angular/build": { "optional": true },
+    "@angular-devkit/architect": { "optional": true },
+    "esbuild": { "optional": true },
+    "vite": { "optional": true },
+    "webpack": { "optional": true }
+  },
+  "devDependencies": {
+    "@angular/core": "^21.0.0",
+    "@angular/build": "^21.1.1",
+    "@angular-devkit/architect": "^0.2101.1",
+    "esbuild": "^0.21.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nacho-labs-llc/angular-grab.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://angular-grab.com",
+  "bugs": "https://github.com/nacho-labs-llc/angular-grab/issues",
+  "keywords": ["angular", "angular-grab", "nacho-labs", "element-picker", "developer-tools", "ai", "esbuild", "vite", "webpack"]
+}

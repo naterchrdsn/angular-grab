@@ -1,0 +1,25 @@
+<app-header />
+
+<main class="main">
+  <section class="hero">
+    <h1>angular-grab Demo</h1>
+    <p>Hold <kbd>⌘C</kbd> (Mac) or <kbd>Ctrl+C</kbd> (Windows) and hover over any element to grab its context for AI coding agents.</p>
+  </section>
+
+  <section class="cards">
+    <app-card
+      title="Element Picker"
+      body="Hover over any UI element while holding the activation key. A blue overlay highlights the element under your cursor."
+    />
+    <app-card
+      title="Component Resolution"
+      body="angular-grab uses Angular's debug APIs to identify which component owns each element, including the component class name."
+    />
+    <app-card
+      title="Source Mapping"
+      body="The esbuild plugin injects data-ng-source attributes at build time, mapping each component to its source file and line number."
+    />
+  </section>
+
+  <app-popover />
+</main>

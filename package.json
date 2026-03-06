@@ -1,0 +1,21 @@
+{
+  "version": "0.1.0",
+  "description": "Grab any element in your Angular app and give it to AI coding agents",
+  "author": "Nate Richardson <hello@naterichardson.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.4",
+    "turbo": "^2.8.13"
+  }
+}
