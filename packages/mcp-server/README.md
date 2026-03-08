@@ -2,24 +2,42 @@
 
 > MCP server for angular-grab — query grabbed elements from AI coding agents
 
-This MCP (Model Context Protocol) server lets AI coding agents like Claude Desktop access your angular-grab history. It runs a single process that provides both:
+This MCP (Model Context Protocol) server lets AI coding agents like Claude Code, Cursor, and Windsurf access your angular-grab history. It runs a single process that provides both:
 
 - **MCP tools** over stdio for AI agent queries
 - **HTTP webhook** on port 3456 to receive grabs from the browser
 
-## Install
+## Quick Setup
 
 ```bash
-npm install -g @nacho-labs/angular-grab-mcp
+npx @nacho-labs/angular-grab add mcp
 ```
 
-Or run directly with npx:
+This auto-detects your editor and configures the MCP server. Restart your editor to activate.
+
+## Manual Setup
+
+### Claude Code
 
 ```bash
-npx @nacho-labs/angular-grab-mcp
+claude mcp add angular-grab -- npx -y @nacho-labs/angular-grab-mcp@latest
 ```
 
-## Configuration
+### Cursor / Windsurf / Other Editors
+
+Add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "angular-grab": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@nacho-labs/angular-grab-mcp@latest"]
+    }
+  }
+}
+```
 
 ### Claude Desktop
 
@@ -30,7 +48,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   "mcpServers": {
     "angular-grab": {
       "command": "npx",
-      "args": ["@nacho-labs/angular-grab-mcp"]
+      "args": ["-y", "@nacho-labs/angular-grab-mcp@latest"]
     }
   }
 }

@@ -210,6 +210,18 @@ The `@nacho-labs/angular-grab` package provides subpath exports for different bu
 | `@nacho-labs/angular-grab/builder` | Angular CLI custom builders |
 | `@nacho-labs/angular-grab/global` | IIFE browser bundle |
 
+## MCP Server (AI Agent Integration)
+
+Connect angular-grab to AI coding agents like Claude Code, Cursor, or Windsurf so they can query your grabbed elements directly:
+
+```bash
+npx @nacho-labs/angular-grab add mcp
+```
+
+This auto-detects your editor and configures the MCP server. After setup, your AI agent can access elements you've grabbed from the browser — no more copy-pasting.
+
+See [@nacho-labs/angular-grab-mcp](./packages/mcp-server) for details.
+
 ## License
 
 MIT
