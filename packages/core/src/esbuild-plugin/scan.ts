@@ -16,7 +16,7 @@ export type SourceMap = Record<string, ComponentSourceInfo>;
  */
 export function scanComponentSources(rootDir: string): SourceMap {
   const sourceMap: SourceMap = {};
-  const files = findComponentFiles(rootDir);
+  const files = findTypeScriptFiles(rootDir);
 
   for (const filePath of files) {
     const content = fs.readFileSync(filePath, 'utf8');
@@ -73,7 +73,7 @@ function extractComponents(code: string, filePath: string): ComponentInfo[] {
   return results;
 }
 
-function findComponentFiles(rootDir: string): string[] {
+function findTypeScriptFiles(rootDir: string): string[] {
   const results: string[] = [];
   const srcDir = path.join(rootDir, 'src');
 
@@ -98,7 +98,7 @@ function walk(dir: string, results: string[]): void {
 
     if (entry.isDirectory()) {
       walk(fullPath, results);
-    } else if (entry.name.endsWith('.component.ts')) {
+    } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') && !entry.name.endsWith('.d.ts')) {
       results.push(fullPath);
     }
   }
