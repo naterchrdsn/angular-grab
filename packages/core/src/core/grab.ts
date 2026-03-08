@@ -258,8 +258,12 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
     toolbar.update(store.state);
   }
 
-  function doDeactivate(): void {
+  function doDeactivate(force = false): void {
     if (!store.state.active) return;
+
+    // In hold mode, don't deactivate if the page is frozen — the user
+    // explicitly asked to keep selection mode alive.
+    if (!force && store.state.frozen) return;
 
     store.state.active = false;
     store.state.frozen = false;
@@ -339,7 +343,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
 
     onDismiss() {
       closeAllPopovers();
-      doDeactivate();
+      doDeactivate(true);
       store.state.toolbar = { ...store.state.toolbar, visible: false };
       toolbar.hide();
     },
@@ -452,13 +456,21 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
 
   // --- Freeze key handler (F key during selection mode) ---
   function handleFreezeKey(e: KeyboardEvent): void {
-    if (!store.state.active) return;
     if (e.key.toLowerCase() !== 'f') return;
     const tag = (e.target as Element)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     if ((e.target as HTMLElement)?.isContentEditable) return;
 
+    // Allow freeze when active, or when toolbar is visible (just deactivated)
+    if (!store.state.active && !store.state.toolbar.visible) return;
+
     e.preventDefault();
+
+    // Re-activate if needed (user pressed 'f' right after releasing activation key)
+    if (!store.state.active) {
+      doActivate();
+    }
+
     toggleFreeze();
   }
   document.addEventListener('keydown', handleFreezeKey, true);

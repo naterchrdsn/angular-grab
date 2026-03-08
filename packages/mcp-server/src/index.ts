@@ -1,0 +1,461 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  McpError,
+  ErrorCode,
+} from '@modelcontextprotocol/sdk/types.js';
+import { createServer } from 'node:http';
+import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+import type { GrabEntry, GrabHistory } from './types.js';
+
+const DEFAULT_HISTORY_PATH = join(homedir(), '.angular-grab', 'history.json');
+const DEFAULT_WEBHOOK_PORT = 3456;
+
+let historyPath = DEFAULT_HISTORY_PATH;
+let cachedHistory: GrabHistory | null = null;
+
+async function ensureHistoryFile(): Promise<void> {
+  try {
+    const exists = await stat(historyPath).catch(() => null);
+    if (!exists) {
+      await mkdir(dirname(historyPath), { recursive: true });
+      const initial: GrabHistory = { entries: [], maxEntries: 50 };
+      await writeFile(historyPath, JSON.stringify(initial, null, 2));
+    }
+  } catch (error) {
+    console.error('Failed to ensure history file:', error);
+  }
+}
+
+async function readHistory(): Promise<GrabHistory> {
+  if (cachedHistory) {
+    return cachedHistory;
+  }
+
+  try {
+    const content = await readFile(historyPath, 'utf-8');
+    const data = JSON.parse(content) as GrabHistory;
+    cachedHistory = data;
+    return data;
+  } catch {
+    return { entries: [], maxEntries: 50 };
+  }
+}
+
+// Serialize writes to prevent concurrent read-modify-write data loss
+let writeQueue: Promise<void> = Promise.resolve();
+
+async function addGrab(context: GrabEntry['context'], snippet: string): Promise<void> {
+  writeQueue = writeQueue.then(async () => {
+    // Always read fresh from disk inside the serialized queue
+    cachedHistory = null;
+    const history = await readHistory();
+
+    const newEntry: GrabEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      context,
+      snippet,
+      timestamp: Date.now(),
+    };
+
+    history.entries = [newEntry, ...history.entries].slice(0, history.maxEntries);
+    await writeFile(historyPath, JSON.stringify(history, null, 2));
+    cachedHistory = history;
+  });
+  await writeQueue;
+}
+
+function searchHistory(
+  history: GrabHistory,
+  query?: string,
+  componentName?: string,
+  filePath?: string,
+  limit = 10
+): GrabEntry[] {
+  let results = [...history.entries];
+
+  if (query) {
+    const q = query.toLowerCase();
+    results = results.filter(
+      (entry) =>
+        entry.context.html.toLowerCase().includes(q) ||
+        (entry.context.componentName?.toLowerCase().includes(q) ?? false) ||
+        (entry.context.filePath?.toLowerCase().includes(q) ?? false) ||
+        entry.context.selector.toLowerCase().includes(q)
+    );
+  }
+
+  if (componentName) {
+    const cn = componentName.toLowerCase();
+    results = results.filter((entry) =>
+      entry.context.componentName?.toLowerCase().includes(cn) ?? false
+    );
+  }
+
+  if (filePath) {
+    const fp = filePath.toLowerCase();
+    results = results.filter((entry) =>
+      entry.context.filePath?.toLowerCase().includes(fp) ?? false
+    );
+  }
+
+  results.sort((a, b) => b.timestamp - a.timestamp);
+  return results.slice(0, Math.max(0, limit));
+}
+
+function formatEntry(entry: GrabEntry) {
+  return {
+    id: entry.id,
+    timestamp: new Date(entry.timestamp).toISOString(),
+    snippet: entry.snippet,
+    context: {
+      componentName: entry.context.componentName,
+      filePath: entry.context.filePath,
+      line: entry.context.line,
+      column: entry.context.column,
+      selector: entry.context.selector,
+      cssClasses: entry.context.cssClasses,
+      html: entry.context.html,
+      componentStack: entry.context.componentStack,
+    },
+  };
+}
+
+// ── HTTP server (receives grabs from browser) ──
+
+function startWebhookServer(port: number): void {
+  const httpServer = createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method !== 'POST' || req.url !== '/grab') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    const MAX_BODY = 1024 * 512; // 512 KB
+    let body = '';
+    let overflow = false;
+
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString();
+      if (body.length > MAX_BODY) {
+        overflow = true;
+        req.destroy();
+      }
+    });
+
+    req.on('end', async () => {
+      if (overflow) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large' }));
+        return;
+      }
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.html || !data.componentName) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing required fields: html, componentName' }));
+          return;
+        }
+
+        const context: GrabEntry['context'] = {
+          html: data.html,
+          componentName: data.componentName,
+          filePath: data.filePath ?? null,
+          line: data.line ?? null,
+          column: data.column ?? null,
+          selector: data.selector || '',
+          cssClasses: data.cssClasses || [],
+          componentStack: (data.componentStack || []).map((entry: Record<string, unknown>) => ({
+            name: entry.name || '',
+            filePath: entry.filePath ?? null,
+            line: entry.line ?? null,
+            column: entry.column ?? null,
+          })),
+        };
+
+        await addGrab(context, data.snippet || '');
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+
+        console.error(`Grabbed: ${data.componentName} at ${data.filePath ?? 'unknown'}:${data.line ?? '?'}`);
+      } catch (error) {
+        console.error('Failed to process grab:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+    });
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Webhook listener on http://localhost:${port}/grab`);
+  });
+}
+
+// ── MCP server (responds to agent queries via stdio) ──
+
+const mcpServer = new Server(
+  {
+    name: 'angular-grab-mcp',
+    version: '0.1.0',
+  },
+  {
+    capabilities: {
+      tools: {},
+    },
+  }
+);
+
+mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: 'angular_grab_search',
+      description:
+        'Search angular-grab history. Query grabbed Angular elements by text, component name, or file path. Returns matching elements with HTML, component info, and stack trace.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          query: {
+            type: 'string',
+            description:
+              'Search term (searches in HTML, component name, file path, selector)',
+          },
+          componentName: {
+            type: 'string',
+            description: 'Filter by component name (partial match)',
+          },
+          filePath: {
+            type: 'string',
+            description: 'Filter by file path (partial match)',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results (default: 10)',
+            default: 10,
+          },
+        },
+      },
+    },
+    {
+      name: 'angular_grab_recent',
+      description:
+        'Get the most recent grabbed elements. Returns the latest N grabbed elements from angular-grab history.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          limit: {
+            type: 'number',
+            description: 'Number of recent grabs to return (default: 5)',
+            default: 5,
+          },
+        },
+      },
+    },
+    {
+      name: 'angular_grab_get',
+      description:
+        'Get a specific grabbed element by ID. Returns the full context for a single grab entry.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The grab entry ID',
+          },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'angular_grab_stats',
+      description:
+        'Get statistics about angular-grab history. Returns total grabs, unique components, unique files, and recent activity.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+  ],
+}));
+
+mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    const history = await readHistory();
+
+    switch (name) {
+      case 'angular_grab_search': {
+        const { query, componentName, filePath, limit = 10 } = args as {
+          query?: string;
+          componentName?: string;
+          filePath?: string;
+          limit?: number;
+        };
+
+        const results = searchHistory(
+          history,
+          query,
+          componentName,
+          filePath,
+          limit
+        );
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                { total: results.length, results: results.map(formatEntry) },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'angular_grab_recent': {
+        const { limit = 5 } = args as { limit?: number };
+        const sorted = [...history.entries].sort(
+          (a, b) => b.timestamp - a.timestamp
+        );
+        const recent = sorted.slice(0, Math.max(0, limit));
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                { total: recent.length, results: recent.map(formatEntry) },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'angular_grab_get': {
+        const { id } = args as { id: string };
+        const entry = history.entries.find((e) => e.id === id);
+
+        if (!entry) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Grab entry with ID "${id}" not found`
+          );
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(formatEntry(entry), null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'angular_grab_stats': {
+        const uniqueComponents = new Set(
+          history.entries.map((e) => e.context.componentName).filter(Boolean)
+        );
+        const uniqueFiles = new Set(
+          history.entries.map((e) => e.context.filePath).filter(Boolean)
+        );
+
+        const now = Date.now();
+        const last24h = history.entries.filter(
+          (e) => now - e.timestamp < 24 * 60 * 60 * 1000
+        ).length;
+        const last7d = history.entries.filter(
+          (e) => now - e.timestamp < 7 * 24 * 60 * 60 * 1000
+        ).length;
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  totalGrabs: history.entries.length,
+                  uniqueComponents: uniqueComponents.size,
+                  uniqueFiles: uniqueFiles.size,
+                  maxEntries: history.maxEntries,
+                  recentActivity: {
+                    last24Hours: last24h,
+                    last7Days: last7d,
+                  },
+                  mostRecentGrab: history.entries[0]
+                    ? new Date(history.entries[0].timestamp).toISOString()
+                    : null,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      default:
+        throw new McpError(
+          ErrorCode.MethodNotFound,
+          `Unknown tool: ${name}`
+        );
+    }
+  } catch (error) {
+    if (error instanceof McpError) {
+      throw error;
+    }
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+  }
+});
+
+// ── Main ──
+
+async function main() {
+  if (process.env.ANGULAR_GRAB_HISTORY_PATH) {
+    historyPath = process.env.ANGULAR_GRAB_HISTORY_PATH;
+  }
+
+  const webhookPort = parseInt(
+    process.env.ANGULAR_GRAB_PORT || String(DEFAULT_WEBHOOK_PORT)
+  );
+
+  await ensureHistoryFile();
+
+  // Start HTTP listener for incoming grabs from the browser
+  startWebhookServer(webhookPort);
+
+  // Start MCP stdio transport for agent queries
+  const transport = new StdioServerTransport();
+  await mcpServer.connect(transport);
+
+  console.error('angular-grab MCP server running');
+  console.error(`History: ${historyPath}`);
+}
+
+main().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
