@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "angular-grab": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@nacho-labs/angular-grab-mcp@latest"
+      ]
+    }
+  }
+}

@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import { findAngularJson, detectProject, type ProjectInfo } from '../utils/detect-project';
 import { modifyAngularJson } from '../utils/modify-angular-json';
 import { modifyAppConfig } from '../utils/modify-app-config';
+import { addMcp } from './add-mcp';
 
 const PACKAGES = ['@nacho-labs/angular-grab'];
 
@@ -95,12 +96,17 @@ export async function init(): Promise<void> {
     warn('    // then add provideAngularGrab() to your providers array');
   }
 
+  // 7. Set up MCP server (.mcp.json)
+  console.log('');
+  await addMcp();
+
   console.log('');
   log('\x1b[32mDone!\x1b[0m angular-grab is ready.');
   console.log('');
   console.log('  Next steps:');
-  console.log('    1. Run \x1b[1mng serve\x1b[0m');
-  console.log('    2. Hold \x1b[1mCmd+C\x1b[0m (Mac) or \x1b[1mCtrl+C\x1b[0m (Windows) and hover over elements');
-  console.log('    3. Click to copy element context to clipboard');
+  console.log('    1. \x1b[1mRestart your editor\x1b[0m to activate the MCP connection');
+  console.log('    2. Run \x1b[1mng serve\x1b[0m');
+  console.log('    3. Hold \x1b[1mCmd+C\x1b[0m (Mac) or \x1b[1mCtrl+C\x1b[0m (Windows) and hover over elements');
+  console.log('    4. Click to grab — your AI agent can query it immediately');
   console.log('');
 }

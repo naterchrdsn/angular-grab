@@ -8,8 +8,5 @@
       "WebFetch(domain:github.com)"
     ]
   },
-  "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "angular-grab"
-  ]
+  "enableAllProjectMcpServers": true
 }
