@@ -6,59 +6,69 @@ import {
   McpError,
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
-import { watch } from 'chokidar';
-import { readFile, stat } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import type { GrabEntry, GrabHistory } from './types.js';
 
-interface GrabEntry {
-  id: string;
-  timestamp: number;
-  html: string;
-  componentName: string;
-  filePath: string;
-  lineNumber: number;
-  stackTrace: Array<{
-    componentName: string;
-    filePath: string;
-    lineNumber: number;
-  }>;
-  selector: string;
-}
-
-interface GrabHistory {
-  entries: GrabEntry[];
-  maxEntries: number;
-}
-
-// Default history file location
 const DEFAULT_HISTORY_PATH = join(homedir(), '.angular-grab', 'history.json');
+const DEFAULT_WEBHOOK_PORT = 3456;
 
 let historyPath = DEFAULT_HISTORY_PATH;
 let cachedHistory: GrabHistory | null = null;
-let watcher: ReturnType<typeof watch> | null = null;
 
-// Read and parse grab history
-async function readHistory(): Promise<GrabHistory> {
+async function ensureHistoryFile(): Promise<void> {
   try {
     const exists = await stat(historyPath).catch(() => null);
     if (!exists) {
-      return { entries: [], maxEntries: 50 };
+      await mkdir(dirname(historyPath), { recursive: true });
+      const initial: GrabHistory = { entries: [], maxEntries: 50 };
+      await writeFile(historyPath, JSON.stringify(initial, null, 2));
     }
-
-    const content = await readFile(historyPath, 'utf-8');
-    const data = JSON.parse(content);
-    cachedHistory = data;
-    return data;
   } catch (error) {
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Failed to read grab history: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
+    console.error('Failed to ensure history file:', error);
   }
 }
 
-// Search grab history
+async function readHistory(): Promise<GrabHistory> {
+  if (cachedHistory) {
+    return cachedHistory;
+  }
+
+  try {
+    const content = await readFile(historyPath, 'utf-8');
+    const data = JSON.parse(content) as GrabHistory;
+    cachedHistory = data;
+    return data;
+  } catch {
+    return { entries: [], maxEntries: 50 };
+  }
+}
+
+// Serialize writes to prevent concurrent read-modify-write data loss
+let writeQueue: Promise<void> = Promise.resolve();
+
+async function addGrab(context: GrabEntry['context'], snippet: string): Promise<void> {
+  writeQueue = writeQueue.then(async () => {
+    // Always read fresh from disk inside the serialized queue
+    cachedHistory = null;
+    const history = await readHistory();
+
+    const newEntry: GrabEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      context,
+      snippet,
+      timestamp: Date.now(),
+    };
+
+    history.entries = [newEntry, ...history.entries].slice(0, history.maxEntries);
+    await writeFile(historyPath, JSON.stringify(history, null, 2));
+    cachedHistory = history;
+  });
+  await writeQueue;
+}
+
 function searchHistory(
   history: GrabHistory,
   query?: string,
@@ -68,43 +78,138 @@ function searchHistory(
 ): GrabEntry[] {
   let results = [...history.entries];
 
-  // Filter by query (searches in HTML, component name, file path)
   if (query) {
     const q = query.toLowerCase();
     results = results.filter(
       (entry) =>
-        entry.html.toLowerCase().includes(q) ||
-        entry.componentName.toLowerCase().includes(q) ||
-        entry.filePath.toLowerCase().includes(q) ||
-        entry.selector.toLowerCase().includes(q)
+        entry.context.html.toLowerCase().includes(q) ||
+        (entry.context.componentName?.toLowerCase().includes(q) ?? false) ||
+        (entry.context.filePath?.toLowerCase().includes(q) ?? false) ||
+        entry.context.selector.toLowerCase().includes(q)
     );
   }
 
-  // Filter by component name
   if (componentName) {
     const cn = componentName.toLowerCase();
     results = results.filter((entry) =>
-      entry.componentName.toLowerCase().includes(cn)
+      entry.context.componentName?.toLowerCase().includes(cn) ?? false
     );
   }
 
-  // Filter by file path
   if (filePath) {
     const fp = filePath.toLowerCase();
     results = results.filter((entry) =>
-      entry.filePath.toLowerCase().includes(fp)
+      entry.context.filePath?.toLowerCase().includes(fp) ?? false
     );
   }
 
-  // Sort by timestamp (newest first)
   results.sort((a, b) => b.timestamp - a.timestamp);
-
-  // Limit results
-  return results.slice(0, limit);
+  return results.slice(0, Math.max(0, limit));
 }
 
-// MCP Server
-const server = new Server(
+function formatEntry(entry: GrabEntry) {
+  return {
+    id: entry.id,
+    timestamp: new Date(entry.timestamp).toISOString(),
+    snippet: entry.snippet,
+    context: {
+      componentName: entry.context.componentName,
+      filePath: entry.context.filePath,
+      line: entry.context.line,
+      column: entry.context.column,
+      selector: entry.context.selector,
+      cssClasses: entry.context.cssClasses,
+      html: entry.context.html,
+      componentStack: entry.context.componentStack,
+    },
+  };
+}
+
+// ── HTTP server (receives grabs from browser) ──
+
+function startWebhookServer(port: number): void {
+  const httpServer = createServer(async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method !== 'POST' || req.url !== '/grab') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    const MAX_BODY = 1024 * 512; // 512 KB
+    let body = '';
+    let overflow = false;
+
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString();
+      if (body.length > MAX_BODY) {
+        overflow = true;
+        req.destroy();
+      }
+    });
+
+    req.on('end', async () => {
+      if (overflow) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Payload too large' }));
+        return;
+      }
+      try {
+        const data = JSON.parse(body);
+
+        if (!data.html || !data.componentName) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing required fields: html, componentName' }));
+          return;
+        }
+
+        const context: GrabEntry['context'] = {
+          html: data.html,
+          componentName: data.componentName,
+          filePath: data.filePath ?? null,
+          line: data.line ?? null,
+          column: data.column ?? null,
+          selector: data.selector || '',
+          cssClasses: data.cssClasses || [],
+          componentStack: (data.componentStack || []).map((entry: Record<string, unknown>) => ({
+            name: entry.name || '',
+            filePath: entry.filePath ?? null,
+            line: entry.line ?? null,
+            column: entry.column ?? null,
+          })),
+        };
+
+        await addGrab(context, data.snippet || '');
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+
+        console.error(`Grabbed: ${data.componentName} at ${data.filePath ?? 'unknown'}:${data.line ?? '?'}`);
+      } catch (error) {
+        console.error('Failed to process grab:', error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+    });
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Webhook listener on http://localhost:${port}/grab`);
+  });
+}
+
+// ── MCP server (responds to agent queries via stdio) ──
+
+const mcpServer = new Server(
   {
     name: 'angular-grab-mcp',
     version: '0.1.0',
@@ -116,15 +221,14 @@ const server = new Server(
   }
 );
 
-// List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'angular_grab_search',
       description:
         'Search angular-grab history. Query grabbed Angular elements by text, component name, or file path. Returns matching elements with HTML, component info, and stack trace.',
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           query: {
             type: 'string',
@@ -152,7 +256,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Get the most recent grabbed elements. Returns the latest N grabbed elements from angular-grab history.',
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           limit: {
             type: 'number',
@@ -167,7 +271,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Get a specific grabbed element by ID. Returns the full context for a single grab entry.',
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {
           id: {
             type: 'string',
@@ -182,15 +286,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Get statistics about angular-grab history. Returns total grabs, unique components, unique files, and recent activity.',
       inputSchema: {
-        type: 'object',
+        type: 'object' as const,
         properties: {},
       },
     },
   ],
 }));
 
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   try {
@@ -218,19 +321,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: JSON.stringify(
-                {
-                  total: results.length,
-                  results: results.map((entry) => ({
-                    id: entry.id,
-                    timestamp: new Date(entry.timestamp).toISOString(),
-                    componentName: entry.componentName,
-                    filePath: entry.filePath,
-                    lineNumber: entry.lineNumber,
-                    selector: entry.selector,
-                    html: entry.html,
-                    stackTrace: entry.stackTrace,
-                  })),
-                },
+                { total: results.length, results: results.map(formatEntry) },
                 null,
                 2
               ),
@@ -241,26 +332,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'angular_grab_recent': {
         const { limit = 5 } = args as { limit?: number };
-        const recent = history.entries.slice(0, limit);
+        const sorted = [...history.entries].sort(
+          (a, b) => b.timestamp - a.timestamp
+        );
+        const recent = sorted.slice(0, Math.max(0, limit));
 
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
-                {
-                  total: recent.length,
-                  results: recent.map((entry) => ({
-                    id: entry.id,
-                    timestamp: new Date(entry.timestamp).toISOString(),
-                    componentName: entry.componentName,
-                    filePath: entry.filePath,
-                    lineNumber: entry.lineNumber,
-                    selector: entry.selector,
-                    html: entry.html,
-                    stackTrace: entry.stackTrace,
-                  })),
-                },
+                { total: recent.length, results: recent.map(formatEntry) },
                 null,
                 2
               ),
@@ -284,20 +366,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
-                  id: entry.id,
-                  timestamp: new Date(entry.timestamp).toISOString(),
-                  componentName: entry.componentName,
-                  filePath: entry.filePath,
-                  lineNumber: entry.lineNumber,
-                  selector: entry.selector,
-                  html: entry.html,
-                  stackTrace: entry.stackTrace,
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify(formatEntry(entry), null, 2),
             },
           ],
         };
@@ -305,9 +374,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'angular_grab_stats': {
         const uniqueComponents = new Set(
-          history.entries.map((e) => e.componentName)
+          history.entries.map((e) => e.context.componentName).filter(Boolean)
         );
-        const uniqueFiles = new Set(history.entries.map((e) => e.filePath));
+        const uniqueFiles = new Set(
+          history.entries.map((e) => e.context.filePath).filter(Boolean)
+        );
 
         const now = Date.now();
         const last24h = history.entries.filter(
@@ -360,31 +431,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-// Start the server
+// ── Main ──
+
 async function main() {
-  // Check for custom history path via env var
   if (process.env.ANGULAR_GRAB_HISTORY_PATH) {
     historyPath = process.env.ANGULAR_GRAB_HISTORY_PATH;
   }
 
-  // Watch history file for changes
-  watcher = watch(historyPath, {
-    ignoreInitial: true,
-  });
+  const webhookPort = parseInt(
+    process.env.ANGULAR_GRAB_PORT || String(DEFAULT_WEBHOOK_PORT)
+  );
 
-  watcher.on('change', async () => {
-    try {
-      await readHistory();
-    } catch (error) {
-      console.error('Failed to reload history:', error);
-    }
-  });
+  await ensureHistoryFile();
 
+  // Start HTTP listener for incoming grabs from the browser
+  startWebhookServer(webhookPort);
+
+  // Start MCP stdio transport for agent queries
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await mcpServer.connect(transport);
 
-  console.error('angular-grab MCP server running on stdio');
-  console.error(`Watching history at: ${historyPath}`);
+  console.error('angular-grab MCP server running');
+  console.error(`History: ${historyPath}`);
 }
 
 main().catch((error) => {
