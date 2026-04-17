@@ -37,7 +37,7 @@ describe('generateSnippet', () => {
 
     expect(result).toContain('<div>test</div>');
     expect(result).toContain('in AppComponent');
-    expect(result).toContain('at src/app/app.component.ts:10:5');
+    expect(result).toContain('— app.component.ts:10');
   });
 
   it('includes component name without file path', () => {
@@ -55,7 +55,7 @@ describe('generateSnippet', () => {
     });
     const result = generateSnippet(ctx, 20);
 
-    expect(result).toContain('at src/app.ts:5');
+    expect(result).toContain('— app.ts:5');
     expect(result).not.toContain('in ');
   });
 
@@ -71,9 +71,9 @@ describe('generateSnippet', () => {
     });
     const result = generateSnippet(ctx, 20);
 
-    expect(result).toContain('in ChildComponent at src/child.ts:3:1');
-    expect(result).toContain('in ParentComponent at src/parent.ts:10');
-    expect(result).toContain('in AppComponent at src/app.ts');
+    expect(result).toContain('in ChildComponent — child.ts:3');
+    expect(result).toContain('in ParentComponent — parent.ts:10');
+    expect(result).toContain('in AppComponent — app.ts');
   });
 
   it('prefers component stack over componentName/filePath', () => {
@@ -89,7 +89,7 @@ describe('generateSnippet', () => {
     });
     const result = generateSnippet(ctx, 20);
 
-    expect(result).toContain('in Inner at inner.ts:1');
+    expect(result).toContain('in Inner — inner.ts:1');
     expect(result).not.toContain('Outer');
   });
 

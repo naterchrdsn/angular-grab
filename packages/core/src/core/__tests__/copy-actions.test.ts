@@ -39,12 +39,12 @@ describe('copyWithComment', () => {
     expect(text).toContain('<div>hello</div>');
   });
 
-  it('truncates long snippets with [truncated] marker', async () => {
+  it('truncates long text nodes with ellipsis', async () => {
     const longHtml = '<div>' + 'x'.repeat(3000) + '</div>';
     const ctx = makeContext(longHtml);
     await copyWithComment(ctx, 'note', 200);
     const text = writtenText[0];
-    expect(text).toContain('[truncated]');
+    expect(text).toContain('…');
     expect(text.length).toBeLessThan(longHtml.length + 100);
   });
 
@@ -61,12 +61,13 @@ describe('copyWithComment', () => {
 describe('copyElementSnippet', () => {
   beforeEach(() => { writtenText.length = 0; });
 
-  it('truncates long snippets with [truncated] marker', async () => {
+  it('truncates long text nodes with ellipsis', async () => {
     const longHtml = '<div>' + 'y'.repeat(3000) + '</div>';
     const ctx = makeContext(longHtml);
     await copyElementSnippet(ctx, 200);
     const text = writtenText[0];
-    expect(text).toContain('[truncated]');
+    expect(text).toContain('…');
+    expect(text.length).toBeLessThan(longHtml.length + 100);
   });
 
   it('does not truncate short snippets', async () => {
