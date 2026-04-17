@@ -24,7 +24,8 @@ import { createToolbarRenderer } from './toolbar/toolbar-renderer';
 import { createHistoryPopover } from './toolbar/history-popover';
 import { createActionsMenu } from './toolbar/actions-menu';
 import { createCommentPopover } from './toolbar/comment-popover';
-import { copyElementSnippet, copyElementHtml, copyElementStyles, copyWithComment } from './toolbar/copy-actions';
+import { copyElementSnippet, copyElementHtml, copyElementStyles, buildCommentSnippet, formatMultiSessionClipboard } from './toolbar/copy-actions';
+import type { GrabSession } from './toolbar/copy-actions';
 import { createFreezeOverlay } from './overlay/freeze-overlay';
 import { showSelectFeedback, disposeFeedbackStyles } from './overlay/select-feedback';
 import { TOOLBAR_TOAST_OFFSET } from './constants';
@@ -117,6 +118,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
   // Per-instance state for last selected element (not in store to avoid serialization issues)
   let lastSelectedElement: WeakRef<Element> | null = null;
   let lastSelectedContext: ElementContext | null = null;
+  let grabSessions: GrabSession[] = [];
   let idCounter = 0;
 
   function nextId(): string {
@@ -128,6 +130,37 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
 
   // Set toast bottom offset when toolbar is visible
   updateToastOffset();
+
+  // --- Multi-session clipboard accumulation ---
+  async function accumulateAndCopy(context: ElementContext, comment: string): Promise<boolean> {
+    const maxLines = store.state.options.maxContextLines;
+    const snippet = buildCommentSnippet(context, maxLines, pluginRegistry);
+
+    const lastSession = grabSessions[grabSessions.length - 1];
+    if (lastSession && lastSession.comment === comment) {
+      lastSession.snippets.push(snippet);
+    } else {
+      grabSessions.push({ comment, snippets: [snippet] });
+    }
+
+    const formatted = formatMultiSessionClipboard(grabSessions);
+
+    try {
+      await navigator.clipboard.writeText(formatted);
+      showToast('Copied with comment', {
+        componentName: context.componentName,
+        filePath: context.filePath,
+        line: context.line,
+        column: context.column,
+        cssClasses: context.cssClasses,
+      });
+      addHistoryEntry(context, snippet, comment);
+      pluginRegistry.callHook('onCopySuccess', formatted, context, comment);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   // --- Toolbar element check (aggregates all toolbar-related UI) ---
   function isAnyToolbarElement(el: Element): boolean {
@@ -233,7 +266,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
       lastSelectedElement = new WeakRef(element);
       lastSelectedContext = context;
       showSelectFeedback(element);
-      toolbar.showCommentInput();
+      toolbar.showCommentInput(element);
     },
   });
 
@@ -346,16 +379,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
 
     async onCommentSubmit(comment: string) {
       if (lastSelectedContext) {
-        const maxLines = store.state.options.maxContextLines;
-        const { ok, full } = await copyWithComment(
-          lastSelectedContext,
-          comment,
-          maxLines,
-          pluginRegistry,
-        );
-        if (ok) {
-          addHistoryEntry(lastSelectedContext, full, comment);
-        }
+        await accumulateAndCopy(lastSelectedContext, comment);
       }
       toolbar.hideCommentInput();
       doDeactivate();
@@ -428,6 +452,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
     onClearHistory() {
       lastSelectedContext = null;
       lastSelectedElement = null;
+      grabSessions = [];
       store.state.toolbar = { ...store.state.toolbar, history: [] };
     },
   });
@@ -436,11 +461,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
   const commentPopover = createCommentPopover({
     async onSubmit(comment: string) {
       if (lastSelectedContext) {
-        const maxLines = store.state.options.maxContextLines;
-        const { ok, full } = await copyWithComment(lastSelectedContext, comment, maxLines, pluginRegistry);
-        if (ok) {
-          addHistoryEntry(lastSelectedContext, full, comment);
-        }
+        await accumulateAndCopy(lastSelectedContext, comment);
       }
       if (store.state.active) {
         doDeactivate();
@@ -578,6 +599,7 @@ export function createGrabInstance(options?: Partial<AngularGrabOptions>): Angul
     clearHistory(): void {
       lastSelectedContext = null;
       lastSelectedElement = null;
+      grabSessions = [];
       store.state.toolbar = { ...store.state.toolbar, history: [] };
     },
 

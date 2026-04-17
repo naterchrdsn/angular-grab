@@ -117,17 +117,26 @@ export function createHistoryPopover(callbacks: HistoryPopoverCallbacks): Histor
         flex: 1;
         min-width: 0;
       }
-      #${POPOVER_ID} .ag-history-selector {
-        font: 12px/1.3 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-        color: var(--ag-popover-text, #e2e8f0);
+      #${POPOVER_ID} .ag-history-comment-title {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--ag-accent, #3b82f6);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      #${POPOVER_ID} .ag-history-selector {
+        font: 11px/1.3 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        color: var(--ag-text-muted, #64748b);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-top: 2px;
+      }
       #${POPOVER_ID} .ag-history-meta {
         font-size: 11px;
         color: var(--ag-text-muted, #64748b);
-        margin-top: 2px;
+        margin-top: 1px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -144,14 +153,6 @@ export function createHistoryPopover(callbacks: HistoryPopoverCallbacks): Histor
       #${POPOVER_ID} .ag-history-file-link:hover {
         text-decoration: underline;
         color: var(--ag-accent, #3b82f6);
-      }
-      #${POPOVER_ID} .ag-history-comment {
-        font-size: 11px;
-        color: var(--ag-accent, #3b82f6);
-        margin-top: 2px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
     `;
     document.head.appendChild(style);
@@ -189,13 +190,14 @@ export function createHistoryPopover(callbacks: HistoryPopoverCallbacks): Histor
           meta += `${sep}<a class="ag-history-file-link" href="${escapeHtml(uri)}" title="Open in VS Code">${fileName}</a>`;
         }
 
-        html += `<button class="ag-history-item" data-ag-history-id="${escapeHtml(entry.id)}" aria-label="Re-copy ${selector}">`;
+        const ariaLabel = entry.comment ? escapeHtml(entry.comment) : selector;
+        html += `<button class="ag-history-item" data-ag-history-id="${escapeHtml(entry.id)}" aria-label="Re-copy ${ariaLabel}">`;
         html += `<div class="ag-history-info">`;
+        if (entry.comment) {
+          html += `<div class="ag-history-comment-title">${escapeHtml(entry.comment)}</div>`;
+        }
         html += `<div class="ag-history-selector">${selector}</div>`;
         if (meta) html += `<div class="ag-history-meta">${meta}</div>`;
-        if (entry.comment) {
-          html += `<div class="ag-history-comment">${escapeHtml(entry.comment)}</div>`;
-        }
         html += `</div>`;
         html += `<span class="ag-history-time">${time}</span>`;
         html += `</button>`;
