@@ -96,7 +96,7 @@ export function createNoopApi(): AngularGrabAPI {
   };
 }
 
-export function createGrabInstance(options?: Partial<AngularGrabOptions>): AngularGrabAPI {
+function createGrabInstance(options?: Partial<AngularGrabOptions>): AngularGrabAPI {
   const defaults = getDefaultOptions();
   const merged: AngularGrabOptions = { ...defaults, ...options };
 
